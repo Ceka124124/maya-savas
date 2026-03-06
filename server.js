@@ -11,20 +11,22 @@ const io     = new Server(server, { cors: { origin: '*' }, pingInterval: 10000, 
 
 /*
 ═══════════════════════════════════════════════════
-  TOKAT OYUNU — 4 Kişilik Matematik Savaşı Server
+  TOKAT OYUNU — 2-4 Kişilik Matematik Savaşı Server
   
   FLOW:
-    lobby(4 players) → question(10s) → reveal → next question
+    lobby(2-4 players) → question(12s) → reveal → next question
   
   RULES:
-    • 4 players, 2 teams of 2 (Team A vs Team B)  
+    • 2-4 players, 2 teams (Team A vs Team B)
+    • 2 players: 1v1 (slot 0 = A, slot 1 = B)
+    • 3 players: slot 0,1 = A;  slot 2 = B
+    • 4 players: slot 0,1 = A;  slot 2,3 = B
     • Math question shown to everyone
     • Everyone types answer and submits
     • First CORRECT answer wins the round
-    • Winner slaps ONE wrong answerer (or nearest opponent)
+    • Winner slaps a wrong-answering opponent
     • Slapped player loses HP
-    • 100 HP per player — team loses when both members die
-    • Wrong answer = vulnerable to slap
+    • 100 HP per player — team loses when ALL members die
     • Slap damage: 15-25 HP
 ═══════════════════════════════════════════════════
 */
@@ -254,12 +256,14 @@ io.on('connection', socket => {
     if (room.players.length >= 4) return cb?.({ ok: false, e: 'Oda dolu' });
     if (room.phase !== 'lobby')   return cb?.({ ok: false, e: 'Oyun başladı' });
 
-    const slot   = room.players.length;
+    const slot = room.players.length;
+    // Team assignment: slot 0 → A, slot 1 → B, slot 2 → A, slot 3 → B  (alternating = fair)
+    const team = slot % 2 === 0 ? 'A' : 'B';
     const player = {
       id: socket.id, name: nm, slot,
       avatar: AVATARS[slot],
       color:  COLORS[slot],
-      team:   slot < 2 ? 'A' : 'B',  // 0,1 → Team A;  2,3 → Team B
+      team,
       hp: MAX_HP,
       on: true,
     };
@@ -270,16 +274,20 @@ io.on('connection', socket => {
     broadcast(room);
     cb?.({ ok: true, roomId: room.id, pid: socket.id, slot, team: player.team });
 
-    // Auto-start when 4 players
-    if (room.players.length === 4) {
-      setTimeout(() => {
-        if (room.phase === 'lobby' && room.players.length === 4) {
+    // Auto-start when 2+ players (with short delay to allow more to join)
+    const n = room.players.length;
+    if (n >= 2) {
+      // Wait 8s for more players, then start anyway
+      clearTimeout(timers.get(room.id + '_start'));
+      const delay = n >= 4 ? 800 : 8000;
+      timers.set(room.id + '_start', setTimeout(() => {
+        if (room.phase === 'lobby' && room.players.length >= 2) {
           room.phase = 'countdown';
           broadcast(room);
           pub(room, 'countdown', {});
           setTimeout(() => startRound(room), 3000);
         }
-      }, 800);
+      }, delay));
     }
   });
 
@@ -301,7 +309,8 @@ io.on('connection', socket => {
     for (const p of room.players) { p.hp = MAX_HP; }
     broadcast(room);
     cb?.({ ok: true });
-    if (room.players.length === 4) {
+    if (room.players.length >= 2) {
+      const delay = room.players.length >= 4 ? 800 : 3000;
       setTimeout(() => {
         if (room.phase === 'lobby') {
           room.phase = 'countdown';
@@ -309,7 +318,7 @@ io.on('connection', socket => {
           pub(room, 'countdown', {});
           setTimeout(() => startRound(room), 3000);
         }
-      }, 1000);
+      }, delay);
     }
   });
 
